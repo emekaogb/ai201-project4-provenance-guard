@@ -1,0 +1,12 @@
+[
+  {
+    "content_id": "9973bffa-614f-4621-be6e-932d60e96302",
+    "creator_id": "test-user-1",
+    "timestamp": "2026-07-01T02:07:34.355631Z",
+    "attribution": "uncertain",
+    "confidence": 0.37,
+    "llm_score": 0.315,
+    "linguistic_score": null,
+    "status": "classified"
+  }
+]
