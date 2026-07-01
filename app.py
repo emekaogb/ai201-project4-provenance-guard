@@ -18,7 +18,10 @@ from flask import Flask, request, jsonify
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from signal_1_perplexity import calculate_perplexity
-from src.audit_log import log_submission, get_log
+from signal_2_linguistic_features import calculate_linguistic_score
+from scoring_logic import classify_content
+from src.audit_log import log_submission, get_log, get_submission_by_id
+from label_generation import generate_appeal_endpoint, generate_label
 
 # Configure logging
 logging.basicConfig(
@@ -37,6 +40,9 @@ limiter = Limiter(
     default_limits=["100 per hour"],
     storage_uri="memory://",
 )
+
+# Register appeals endpoint
+app = generate_appeal_endpoint(app)
 
 
 # ============================================================================
@@ -140,39 +146,8 @@ def generate_transparency_label(classification: str, confidence_score: float, si
         )
 
 
-# ============================================================================
-# Classification Logic
-# ============================================================================
-
-def classify_content(signals: Dict[str, float]) -> Tuple[str, float]:
-    """
-    Classify content based on signal scores.
-
-    Args:
-        signals: Dictionary with signal scores (e.g., {"perplexity": 0.75}).
-
-    Returns:
-        A tuple (classification, confidence_score) where:
-        - classification is one of "human", "ai", or "uncertain"
-        - confidence_score is between 0 and 1
-    """
-    # For Milestone 3, we only have Signal 1 (perplexity).
-    # Final score = perplexity score (will be weighted with Signal 2 in Milestone 4).
-    final_score = signals.get("perplexity", 0.5)
-
-    # Calculate confidence: 2 × |finalScore - 0.5|
-    # This ranges from 0 (at 0.5) to 1.0 (at 0.0 or 1.0)
-    confidence = 2 * abs(final_score - 0.5)
-
-    # Decision thresholds
-    if final_score > 0.75 and confidence > 0.6:
-        classification = "human"
-    elif final_score < 0.25 and confidence > 0.6:
-        classification = "ai"
-    else:
-        classification = "uncertain"
-
-    return classification, confidence
+# Note: classify_content is imported from scoring_logic.py
+# It combines both Signal 1 (perplexity) and Signal 2 (linguistic features)
 
 
 # ============================================================================
@@ -218,22 +193,31 @@ def submit_content():
         text = data.get("text").strip()
         creator_id = data.get("creator_id").strip()
 
-        # Calculate signals
+        # Calculate Signal 1: Perplexity
         try:
             perplexity_score = calculate_perplexity(text)
         except Exception as e:
             logger.error(f"Error calculating perplexity: {str(e)}")
             perplexity_score = 0.5  # Default to neutral on error
 
+        # Calculate Signal 2: Linguistic Features
+        try:
+            linguistic_score = calculate_linguistic_score(text)
+        except Exception as e:
+            logger.error(f"Error calculating linguistic score: {str(e)}")
+            linguistic_score = 0.5  # Default to neutral on error
+
         signals = {
             "perplexity": perplexity_score,
+            "linguistic": linguistic_score,
         }
 
-        # Classify content
-        classification, confidence_score = classify_content(signals)
+        # Classify content using both signals
+        classification, confidence_score = classify_content(perplexity_score, linguistic_score)
 
         # Generate transparency label
-        transparency_label = generate_transparency_label(classification, confidence_score, signals)
+        label_dict = generate_label(classification, confidence_score)
+        transparency_label = label_dict
 
         # Generate submission ID and timestamp
         submission_id = str(uuid.uuid4())
@@ -247,6 +231,7 @@ def submit_content():
                 attribution=classification,
                 confidence=round(confidence_score, 3),
                 llm_score=round(perplexity_score, 3),
+                linguistic_score=round(linguistic_score, 3),
                 status="classified"
             )
         except Exception as e:
@@ -259,6 +244,7 @@ def submit_content():
             "confidence_score": round(confidence_score, 3),
             "signals": {
                 "perplexity": round(perplexity_score, 3),
+                "linguistic": round(linguistic_score, 3),
             },
             "transparency_label": transparency_label,
             "timestamp": timestamp,
